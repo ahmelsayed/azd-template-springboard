@@ -1,1 +1,9 @@
-# ahmels-azd-template-springboard
+# todo C# template
+
+```
+azd login
+azd provision
+
+# build container images
+# azd up
+```

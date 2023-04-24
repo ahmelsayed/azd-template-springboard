@@ -1,30 +1,59 @@
 targetScope = 'subscription'
+
+@minLength(1)
+@maxLength(64)
+@description('Name of the the environment which is used to generate a short unique hash used in all resources.')
 param environmentName string
+
+@minLength(1)
+@description('Primary location for all resources')
 param location string
 param resourceGroupName string = ''
 
-param acaLocation string = 'northcentralusstage' // use North Central US (Stage) for ACA resources
-param acaEnvironmentName string = 'aca-env'
+param containerAppsEnvironmentName string = ''
+param containerRegistryName string = ''
+param logAnalyticsName string = ''
+param applicationInsightsDashboardName string = ''
+param applicationInsightsName string = ''
+
 param postgreSqlName string = 'postgres'
 param redisCacheName string = 'redis'
-param webServiceName string = 'web-service'
-param apiServiceName string = 'api-service'
-param webImageName string = 'docker.io/ahmelsayed/springboard-web:latest'
-param apiImageName string = 'docker.io/ahmelsayed/springboard-api:latest'
+param apiContainerAppName string = 'api-service'
+param apiImageName string = ''
+param webContainerAppName string = 'web-service'
+param webImageName string = ''
+
+var abbrs = loadJsonContent('./abbreviations.json')
+var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = { 'azd-env-name': environmentName }
 
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: !empty(resourceGroupName) ? resourceGroupName : '${environmentName}-rg'
+  name: !empty(resourceGroupName) ? resourceGroupName : '${abbrs.resourcesResourceGroups}${environmentName}'
   location: location
   tags: tags
 }
 
-module acaEnvironment './core/host/container-apps-environment.bicep' = {
-  name: 'container-apps-environment'
+module monitoring './core/monitor/monitoring.bicep' = {
+  name: 'monitoring'
   scope: rg
   params: {
-    name: acaEnvironmentName
-    location: acaLocation
+    location: location
+    tags: tags
+    logAnalyticsName: !empty(logAnalyticsName) ? logAnalyticsName : '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+    applicationInsightsName: !empty(applicationInsightsName) ? applicationInsightsName : '${abbrs.insightsComponents}${resourceToken}'
+    applicationInsightsDashboardName: !empty(applicationInsightsDashboardName) ? applicationInsightsDashboardName : '${abbrs.portalDashboards}${resourceToken}'
+  }
+}
+
+module containerApps './core/host/container-apps.bicep' = {
+  name: 'container-apps'
+  scope: rg
+  params: {
+    name: 'app'
+    containerAppsEnvironmentName: !empty(containerAppsEnvironmentName) ? containerAppsEnvironmentName : '${abbrs.appManagedEnvironments}${resourceToken}'
+    containerRegistryName: !empty(containerRegistryName) ? containerRegistryName : '${abbrs.containerRegistryRegistries}${resourceToken}'
+    location: location
+    logAnalyticsWorkspaceName: monitoring.outputs.logAnalyticsWorkspaceName
     tags: tags
   }
 }
@@ -34,9 +63,9 @@ module postgreSql './core/host/springboard-container-app.bicep' = {
   scope: rg
   params: {
     name: postgreSqlName
-    location: acaLocation
+    location: location
     tags: tags
-    managedEnvironmentId: acaEnvironment.outputs.id
+    environmentId: containerApps.outputs.environmentId
     serviceType: 'postgres'
   }
 }
@@ -46,145 +75,62 @@ module redis './core/host/springboard-container-app.bicep' = {
   scope: rg
   params: {
     name: redisCacheName
-    location: acaLocation
+    location: location
     tags: tags
-    managedEnvironmentId: acaEnvironment.outputs.id
+    environmentId: containerApps.outputs.environmentId
     serviceType: 'redis'
   }
 }
 
-// The application backend
-module api './core/host/container-app.bicep' = {
+module api './app/api.bicep' = {
   name: 'api'
   scope: rg
   params: {
-    name: apiServiceName
-    location: acaLocation
+    name: apiContainerAppName
+    location: location
     tags: tags
-    managedEnvironmentId: acaEnvironment.outputs.id
+    containerAppsEnvironmentName: containerApps.outputs.environmentName
     imageName: apiImageName
-    targetPort: 80
-    allowedOrigins: [ '${webServiceName}.${acaEnvironment.outputs.defaultDomain}' ]
-    serviceBinds: [
-      redis.outputs.serviceBind
-      postgreSql.outputs.serviceBind
-    ] 
+    containerRegistryName: containerApps.outputs.registryName
+    applicationInsightsName: monitoring.outputs.applicationInsightsName
+    redisServiceName: redis.outputs.serviceName
+    postgresServiceName: postgreSql.outputs.serviceName
   }
 }
 
 // the application frontend
-module web './core/host/container-app.bicep' = {
+module web './app/web.bicep' = {
   name: 'web'
   scope: rg
   params: {
-    name: webServiceName
-    location: acaLocation
+    name: webContainerAppName
+    location: location
     tags: tags
-    managedEnvironmentId: acaEnvironment.outputs.id
+    containerAppsEnvironmentName: containerApps.outputs.environmentName
     imageName: webImageName
-    targetPort: 80
-    env: [
-      {
-        name: 'REACT_APP_API_BASE_URL'
-        value: 'https://${apiServiceName}.${acaEnvironment.outputs.defaultDomain}'
-      }
-    ]
+    containerRegistryName: containerApps.outputs.registryName
+    apiBaseUrl: 'https://${apiContainerAppName}.${containerApps.outputs.defaultDomain}'
+    applicationInsightsName: monitoring.outputs.applicationInsightsName
   }
 }
 
-// module pgweb './core/host/container-app.bicep' = {
-//   name: 'pgweb'
-//   scope: rg
-//   params: {
-//     name: 'pgweb'
-//     location: acaLocation
-//     tags: tags
-//     managedEnvironmentId: acaEnvironment.outputs.id
-//     imageName: 'docker.io/sosedoff/pgweb:latest'
-//     targetPort: 8081
-//     command: [
-//       '/bin/sh'
-//     ]
-//     args: [
-//       '-c'
-//       'PGWEB_DATABASE_URL=$POSTGRES_URL /usr/bin/pgweb --bind=0.0.0.0 --listen=8081'
-//     ]
-//     serviceBinds: [
-//       postgreSql.outputs.serviceBind
-//     ] 
-//   }
-// }
-
-// module redisStat './core/host/container-app.bicep' = {
-//   name: 'redis-stat'
-//   scope: rg
-//   params: {
-//     name: 'redis-stat'
-//     location: acaLocation
-//     tags: tags
-//     managedEnvironmentId: acaEnvironment.outputs.id
-//     imageName: 'docker.io/insready/redis-stat:latest'
-//     targetPort: 3000
-//     command: [
-//       '/bin/sh'
-//     ]
-//     args: [
-//       '-c'
-//       'redis-stat $REDIS_HOST:$REDIS_PORT --auth=$REDIS_PASSWORD --server=0.0.0.0'
-//     ]
-//     serviceBinds: [
-//       redis.outputs.serviceBind
-//     ] 
-//   }
-// }
-
-// module kafka './core/host/springboard-container-app.bicep' = {
-//   name: 'kafka'
-//   scope: rg
-//   params: {
-//     name: 'kafka-1'
-//     location: acaLocation
-//     managedEnvironmentId: acaEnvironment.outputs.id
-//     serviceType: 'kafka'
-//   }
-// }
-
-// module kafkaApp1 './core/host/container-app.bicep' = {
-//   name: 'kafka-ui'
-//   scope: rg
-//   params: {
-//     name: 'kafka-ui-1'
-//     location: acaLocation
-//     managedEnvironmentId: acaEnvironment.outputs.id
-//     imageName: ''
-//     targetPort: 8080
-//     serviceBinds: [
-//       kafka.outputs.serviceBind
-//     ]
-//     command: [
-//       '/bin/sh'
-//     ]
-//     args: [
-//       '-c'
-//       '''
-//       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
-//       KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG="$KAFKA_PROPERTIES_SASL_JAAS_CONFIG" \
-//       KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM="$KAFKA_SASL_MECHANISM" \
-//       KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL="$KAFKA_SECURITY_PROTOCOL" \
-//       java $JAVA_OPTS -jar kafka-ui-api.jar
-//       '''
-//     ]
-//     env: [
-//       {
-//         name: 'KAFKA_CLUSTERS_0_NAME'
-//         value: kafka.outputs.name
-//       }
-//     ]
-//     // cpu: '1.0'
-//     // memory: '1.0Gi'
-//   }
-// }
-
 // App outputs
-output REACT_APP_API_BASE_URL string = api.outputs.uri
-output REACT_APP_WEB_BASE_URL string = web.outputs.uri
+output SERVICE_API_IMAGE_NAME string = api.outputs.SERVICE_API_IMAGE_NAME
+output SERVICE_WEB_IMAGE_NAME string = web.outputs.SERVICE_WEB_IMAGE_NAME
+output SERVICE_API_NAME string = api.outputs.SERVICE_API_NAME
+output SERVICE_WEB_NAME string = web.outputs.SERVICE_WEB_NAME
+output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
+output APPLICATIONINSIGHTS_NAME string = monitoring.outputs.applicationInsightsName
+output AZURE_CONTAINER_ENVIRONMENT_NAME string = containerApps.outputs.environmentName
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerApps.outputs.registryLoginServer
+output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
+output AZURE_LOCATION string = location
+output AZURE_LOG_ANALYTICS_NAME string = monitoring.outputs.logAnalyticsWorkspaceName
+output AZURE_RESOURCE_GROUP string = rg.name
+output AZURE_TENANT_ID string = tenant().tenantId
+output SERVICE_API_ENDPOINTS array = [ api.outputs.SERVICE_API_URI ]
+output REACT_APP_API_BASE_URL string = api.outputs.SERVICE_API_URI
+output REACT_APP_APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoring.outputs.applicationInsightsConnectionString
+output REACT_APP_WEB_BASE_URL string = web.outputs.SERVICE_WEB_URI
+output AZURE_REDIS_SERVICE_NAME string = redis.outputs.serviceName
+output AZURE_POSTGRES_SERVICE_NAME string = postgreSql.outputs.serviceName

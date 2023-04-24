@@ -7,6 +7,12 @@
       },
       "location": {
         "value": "${AZURE_LOCATION}"
+      },
+      "apiImageName": {
+        "value": "${SERVICE_API_IMAGE_NAME=k8seteste2e.azurecr.io/samples/springboard-api:latest}"
+      },
+      "webImageName": {
+        "value": "${SERVICE_WEB_IMAGE_NAME=k8seteste2e.azurecr.io/samples/springboard-web:latest}"
       }
     }
-} 
+}

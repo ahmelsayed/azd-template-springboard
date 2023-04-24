@@ -2,16 +2,16 @@ param name string
 param location string = resourceGroup().location
 param tags object = {}
 
-param managedEnvironmentId string
+param containerAppsEnvironmentName string
 param containerName string = 'main'
+param containerRegistryName string
 param env array = []
 param external bool = true
 param imageName string
+param keyVaultName string = ''
+param managedIdentity bool = !empty(keyVaultName)
 param targetPort int = 80
-param allowedOrigins array = []
 param serviceBinds array = []
-param args array = []
-param command array = []
 
 @description('CPU cores allocated to a single container instance, e.g. 0.5')
 param containerCpuCoreCount string = '0.5'
@@ -23,18 +23,29 @@ resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
   name: name
   location: location
   tags: tags
+  identity: { type: managedIdentity ? 'SystemAssigned' : 'None' }
   properties: {
-    managedEnvironmentId: managedEnvironmentId
+    managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
       activeRevisionsMode: 'single'
       ingress: {
         external: external
         targetPort: targetPort
         transport: 'auto'
-        corsPolicy: {
-          allowedOrigins: union([ 'https://portal.azure.com', 'https://ms.portal.azure.com' ], allowedOrigins)
-        }
       }
+      secrets: [
+        {
+          name: 'registry-password'
+          value: containerRegistry.listCredentials().passwords[0].value
+        }
+      ]
+      registries: [
+        {
+          server: '${containerRegistry.name}.azurecr.io'
+          username: containerRegistry.name
+          passwordSecretRef: 'registry-password'
+        }
+      ]
     }
     template: {
       serviceBinds: serviceBinds
@@ -43,8 +54,6 @@ resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
           image: imageName
           name: containerName
           env: env
-          command: command
-          args: args
           resources: {
             cpu: json(containerCpuCoreCount)
             memory: containerMemory
@@ -55,5 +64,17 @@ resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
   }
 }
 
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2022-03-01' existing = {
+  name: containerAppsEnvironmentName
+}
+
+// 2022-02-01-preview needed for anonymousPullEnabled
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2022-02-01-preview' existing = {
+  name: containerRegistryName
+}
+
+output defaultDomain string = containerAppsEnvironment.properties.defaultDomain
+output identityPrincipalId string = managedIdentity ? app.identity.principalId : ''
+output imageName string = imageName
+output name string = app.name
 output uri string = 'https://${app.properties.configuration.ingress.fqdn}'
-output appId string = app.id

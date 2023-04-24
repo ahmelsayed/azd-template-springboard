@@ -2,7 +2,7 @@ param name string
 param location string = resourceGroup().location
 param tags object = {}
 
-param managedEnvironmentId string
+param environmentId string
 param serviceType string = ''
 
 resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
@@ -10,7 +10,7 @@ resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
   location: location
   tags: tags
   properties: {
-    managedEnvironmentId: managedEnvironmentId
+    environmentId: environmentId
     configuration: {
       service: {
         type: serviceType
@@ -27,9 +27,4 @@ resource app 'Microsoft.App/containerApps@2022-11-01-preview' = {
   }
 }
 
-output serviceBind object = {
-  serviceId: app.id
-  name: name
-}
-
-output name string = app.name
+output serviceName string = app.name
